@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y cmake g++
+      - run: |
+          mkdir -p build && cd build
+          cmake .. -DSIMD=AVX2 -DCMAKE_BUILD_TYPE=Release
+          cmake --build . -j $(nproc)
+      - run: cd build && tar -czf ../ptms-linux-x64.tar.gz benchmark test_correctness
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: ptms-linux-x64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+      - run: |
+          mkdir -p build && cd build
+          cmake .. -G Ninja -DSIMD=AVX2 -DCMAKE_BUILD_TYPE=Release
+          cmake --build .
+      - shell: cmd
+        run: cd build && 7z a ..\ptms-windows-x64.zip benchmark.exe test_correctness.exe
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: ptms-windows-x64.zip

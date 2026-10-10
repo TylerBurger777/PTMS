@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it."
+title: "PTMS: Parallel Tournament Merge Sort"
+abstract: >
+  Parallel merge sort with a three-tier pipeline (tournament merge,
+  parallel merge, SIMD base cases). Outperforms tbb::parallel_sort
+  by ~2x on cache-resident data.
+authors:
+  - family-names: "Afimov"
+    given-names: "Andrey"
+version: 1.0.0
+date-released: "2025-01-01"
+license: MIT
+repository-code: "https://github.com/TylerBurger777/PTMS"
+keywords:
+  - sorting
+  - parallel
+  - openmp
+  - simd
+  - avx2
+  - avx-512
+  - merge-sort
