@@ -14,9 +14,41 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-find_package(OpenMP REQUIRED)
+# =====================================================================
+#                       OPENMP
+# =====================================================================
+# On MSYS2 MinGW-w64, CMake's FindOpenMP sometimes fails to locate
+# libgomp. We bypass it and pass the absolute path to the linker.
+if(MINGW)
+    message(STATUS "OpenMP: MinGW detected, using direct path")
 
-# SIMD selection
+    execute_process(
+        COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libgomp.dll.a
+        OUTPUT_VARIABLE GOMP_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT GOMP_PATH OR GOMP_PATH STREQUAL "libgomp.dll.a")
+        execute_process(
+            COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libgomp.a
+            OUTPUT_VARIABLE GOMP_PATH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+    endif()
+
+    message(STATUS "OpenMP: libgomp -> ${GOMP_PATH}")
+
+    add_library(OpenMP::OpenMP_CXX INTERFACE IMPORTED)
+    set_target_properties(OpenMP::OpenMP_CXX PROPERTIES
+        INTERFACE_COMPILE_OPTIONS "-fopenmp"
+        INTERFACE_LINK_LIBRARIES "${GOMP_PATH}"
+    )
+else()
+    find_package(OpenMP REQUIRED)
+endif()
+
+# =====================================================================
+#                       SIMD SELECTION
+# =====================================================================
 set(SIMD "AUTO" CACHE STRING "SIMD level: AUTO, AVX512, AVX2, SCALAR")
 set_property(CACHE SIMD PROPERTY STRINGS AUTO AVX512 AVX2 SCALAR)
 
@@ -62,14 +94,24 @@ elseif(SIMD STREQUAL "AVX512")
     if(MSVC)
         add_compile_options(/arch:AVX512)
     else()
-        add_compile_options(-mavx512f)
+        check_cxx_compiler_flag("-mavx512f" HAS_MAVX512)
+        if(HAS_MAVX512)
+            add_compile_options(-mavx512f)
+        else()
+            message(STATUS "  -> not supported by this compiler, falling back to SCALAR")
+        endif()
     endif()
 elseif(SIMD STREQUAL "AVX2")
     message(STATUS "SIMD: AVX2 (user override)")
     if(MSVC)
         add_compile_options(/arch:AVX2)
     else()
-        add_compile_options(-mavx2)
+        check_cxx_compiler_flag("-mavx2" HAS_MAVX2)
+        if(HAS_MAVX2)
+            add_compile_options(-mavx2)
+        else()
+            message(STATUS "  -> not supported by this compiler, falling back to SCALAR")
+        endif()
     endif()
 elseif(SIMD STREQUAL "SCALAR")
     message(STATUS "SIMD: scalar (user override)")
@@ -77,25 +119,40 @@ else()
     message(FATAL_ERROR "Unknown SIMD mode: ${SIMD}")
 endif()
 
+# =====================================================================
+#                       OPTIMIZATION
+# =====================================================================
 if(MSVC)
     add_compile_options(/O2 /EHsc)
 else()
     add_compile_options(-O3)
 endif()
 
+# =====================================================================
+#                       LIBRARY
+# =====================================================================
 add_library(ptms_lib STATIC src/ptms.cpp)
 target_include_directories(ptms_lib PUBLIC include PRIVATE src)
 target_link_libraries(ptms_lib PUBLIC OpenMP::OpenMP_CXX)
 
+# =====================================================================
+#                       BENCHMARK
+# =====================================================================
 add_executable(benchmark benchmark/benchmark.cpp)
 target_include_directories(benchmark PRIVATE src)
 target_link_libraries(benchmark PRIVATE ptms_lib)
 
+# =====================================================================
+#                       TESTS
+# =====================================================================
 enable_testing()
 add_executable(test_correctness tests/test_correctness.cpp)
 target_link_libraries(test_correctness PRIVATE ptms_lib)
 add_test(NAME correctness COMMAND test_correctness)
 
+# =====================================================================
+#                       WARNINGS
+# =====================================================================
 if(NOT MSVC)
     target_compile_options(ptms_lib         PRIVATE -Wall -Wextra)
     target_compile_options(benchmark        PRIVATE -Wall -Wextra)
