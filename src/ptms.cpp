@@ -3,6 +3,7 @@
 //   - ping-pong buffers in recursiveSortPP
 //   - threshold check in middleAlgorithm
 //   - sorting networks only for n = 4..7
+//   - automatic thread count reduction for small N
 //
 // Copyright (c) 2025 Andrey Afimov
 // SPDX-License-Identifier: MIT
@@ -33,28 +34,6 @@ constexpr bool USE_SIMD_FOR_N8     = true;
 constexpr bool USE_SIMD_FOR_N16    = true;
 
 // =====================================================================
-//                     ALIGNED MEMORY
-// =====================================================================
-
-int* aligned_alloc_int(size_t n) {
-    void* p = nullptr;
-#ifdef _WIN32
-    p = _aligned_malloc(n * sizeof(int), 64);
-#else
-    if (posix_memalign(&p, 64, n * sizeof(int)) != 0) p = nullptr;
-#endif
-    return static_cast<int*>(p);
-}
-
-void aligned_free_int(int* p) {
-#ifdef _WIN32
-    _aligned_free(p);
-#else
-    free(p);
-#endif
-}
-
-// =====================================================================
 //                     BRANCHLESS COMPARE-AND-SWAP
 // =====================================================================
 
@@ -68,6 +47,9 @@ inline void cmp_swap(int& a, int& b) {
 // =====================================================================
 //                     SORTING NETWORKS (n = 4..7)
 // =====================================================================
+// Networks for n = 4..7 cover the base case for arrays with
+// N >= 4 * THREADS. For smaller N, the thread count is reduced
+// in sort_int() so that every chunk has at least 4 elements.
 
 inline void sort4(int* a) {
     cmp_swap(a[0], a[1]); cmp_swap(a[2], a[3]);
@@ -459,8 +441,22 @@ void sort_int(int* a, int* buf, int n, int threads) {
     if (n <= 1) return;
     if (a == nullptr || buf == nullptr || buf == a) return;
 
+    // Sorting networks cover block sizes 4..7. For arrays smaller
+    // than 4, use a small in-place insertion sort directly.
+    if (n < 4) {
+        for (int i = 1; i < n; ++i) {
+            int key = a[i];
+            int j = i - 1;
+            while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; --j; }
+            a[j + 1] = key;
+        }
+        return;
+    }
+
     int P = (threads > 0) ? threads : omp_get_max_threads();
     if (P > n) P = n;
+    // Ensure every chunk has at least 4 elements (minimum network size).
+    if (P > n / 4) P = n / 4;
     if (P < 1) P = 1;
 
     #pragma omp parallel num_threads(P)
