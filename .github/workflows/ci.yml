@@ -7,6 +7,9 @@ on:
     branches: [ main, master ]
 
 jobs:
+  # =====================================================================
+  # LINUX — GCC + OpenMP. Работает без изменений.
+  # =====================================================================
   linux:
     name: Linux / ${{ matrix.simd }}
     runs-on: ubuntu-latest
@@ -16,13 +19,28 @@ jobs:
         simd: [AVX2, SCALAR]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y cmake g++
-      - run: |
-          mkdir -p build && cd build
-          cmake .. -DSIMD=${{ matrix.simd }} -DCMAKE_BUILD_TYPE=Release
-          cmake --build . -j $(nproc)
-      - run: cd build && ctest --output-on-failure
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++
+
+      - name: Configure
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DSIMD=${{ matrix.simd }} -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cd build && cmake --build . -j $(nproc)
+
+      - name: Test
+        run: cd build && ctest --output-on-failure
+
+  # =====================================================================
+  # WINDOWS — MSYS2 MinGW-w64 GCC.
+  # OpenMP указывается вручную: CMake не находит libgomp автоматически.
+  # =====================================================================
   windows:
     name: Windows / ${{ matrix.simd }}
     runs-on: windows-latest
@@ -35,7 +53,9 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
@@ -43,25 +63,54 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
-      - run: |
-          mkdir -p build && cd build
-          cmake .. -G Ninja -DSIMD=${{ matrix.simd }} -DCMAKE_BUILD_TYPE=Release
-          cmake --build .
-      - run: cd build && ctest --output-on-failure
 
+      - name: Configure
+        run: |
+          mkdir -p build
+          cd build
+          GOMP_LIB=$(g++ -print-file-name=libgomp.dll.a)
+          echo "libgomp found at: ${GOMP_LIB}"
+          cmake .. -G Ninja \
+            -DSIMD=${{ matrix.simd }} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOpenMP_CXX_FLAGS="-fopenmp" \
+            -DOpenMP_CXX_LIB_NAMES="gomp" \
+            -DOpenMP_gomp_LIBRARY="${GOMP_LIB}"
+
+      - name: Build
+        run: cd build && cmake --build .
+
+      - name: Copy MinGW runtime DLLs
+        run: |
+          cp /mingw64/bin/libgomp-1.dll build/ 2>/dev/null || true
+          cp /mingw64/bin/libstdc++-6.dll build/ 2>/dev/null || true
+          cp /mingw64/bin/libgcc_s_seh-1.dll build/ 2>/dev/null || true
+
+      - name: Test
+        run: cd build && ctest --output-on-failure
+
+  # =====================================================================
+  # macOS — только SCALAR.
+  # Раннер macos-latest = Apple Silicon (ARM), AVX2 на нём не существует.
+  # =====================================================================
   macos:
-    name: macOS / ${{ matrix.simd }}
+    name: macOS / SCALAR
     runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        simd: [AVX2, SCALAR]
     steps:
       - uses: actions/checkout@v4
-      - run: brew install cmake libomp
-      - run: |
-          mkdir -p build && cd build
-          cmake .. -DSIMD=${{ matrix.simd }} -DCMAKE_BUILD_TYPE=Release \
+
+      - name: Install dependencies
+        run: brew install cmake libomp
+
+      - name: Configure
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DSIMD=SCALAR -DCMAKE_BUILD_TYPE=Release \
                    -DOpenMP_ROOT="$(brew --prefix libomp)"
-          cmake --build . -j $(sysctl -n hw.ncpu)
-      - run: cd build && ctest --output-on-failure
+
+      - name: Build
+        run: cd build && cmake --build . -j $(sysctl -n hw.ncpu)
+
+      - name: Test
+        run: cd build && ctest --output-on-failure
