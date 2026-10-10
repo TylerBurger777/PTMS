@@ -39,7 +39,7 @@ jobs:
 
   # =====================================================================
   # WINDOWS — MSYS2 MinGW-w64 GCC
-  # OpenMP path is resolved inside CMakeLists.txt via MINGW branch.
+  # libgomp устанавливается явно (нужен для -lgomp при линковке).
   # =====================================================================
   windows:
     name: Windows / ${{ matrix.simd }}
@@ -61,8 +61,16 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libgomp
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
+
+      - name: Verify libgomp
+        run: |
+          echo "=== libgomp search ==="
+          find /mingw64 -name "libgomp*" 2>/dev/null
+          echo "=== g++ -print-file-name ==="
+          g++ -print-file-name=libgomp.dll.a
 
       - name: Configure
         run: |
@@ -83,7 +91,7 @@ jobs:
         run: cd build && ctest --output-on-failure
 
   # =====================================================================
-  # macOS — only SCALAR (Apple Silicon has no AVX2)
+  # macOS — только SCALAR (Apple Silicon не поддерживает AVX2)
   # =====================================================================
   macos:
     name: macOS / SCALAR
