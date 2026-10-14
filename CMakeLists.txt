@@ -17,11 +17,8 @@ endif()
 # =====================================================================
 #                       OPENMP
 # =====================================================================
-# On MSYS2 MinGW-w64, CMake's FindOpenMP sometimes fails to locate
-# libgomp. We bypass it and pass the absolute path to the linker.
 if(MINGW)
     message(STATUS "OpenMP: MinGW detected, using direct path")
-
     execute_process(
         COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libgomp.dll.a
         OUTPUT_VARIABLE GOMP_PATH
@@ -34,9 +31,7 @@ if(MINGW)
             OUTPUT_STRIP_TRAILING_WHITESPACE
         )
     endif()
-
     message(STATUS "OpenMP: libgomp -> ${GOMP_PATH}")
-
     add_library(OpenMP::OpenMP_CXX INTERFACE IMPORTED)
     set_target_properties(OpenMP::OpenMP_CXX PROPERTIES
         INTERFACE_COMPILE_OPTIONS "-fopenmp"
@@ -57,35 +52,15 @@ include(CheckCXXCompilerFlag)
 
 if(SIMD STREQUAL "AUTO")
     message(STATUS "SIMD: auto-detecting...")
-    if(MSVC)
-        set(CMAKE_REQUIRED_FLAGS "/arch:AVX512")
-        check_cxx_source_compiles("
-            #include <immintrin.h>
-            int main() { __m512i a = _mm512_setzero_si512(); (void)a; return 0; }
-        " HAS_AVX512_MSVC)
-        if(HAS_AVX512_MSVC)
-            message(STATUS "SIMD: AVX-512 (MSVC)")
-            add_compile_options(/arch:AVX512)
-        else()
-            message(STATUS "SIMD: AVX2 (MSVC)")
-            add_compile_options(/arch:AVX2)
-        endif()
+    check_cxx_compiler_flag("-march=native" HAS_MARCH_NATIVE)
+    if(HAS_MARCH_NATIVE)
+        add_compile_options(-march=native)
+        message(STATUS "SIMD: -march=native (CPU probed at compile time)")
     else()
-        check_cxx_compiler_flag("-march=native" HAS_MARCH_NATIVE)
-        if(HAS_MARCH_NATIVE)
-            add_compile_options(-march=native)
-            execute_process(
-                COMMAND ${CMAKE_CXX_COMPILER} -march=native -dM -E -x c++ /dev/null
-                OUTPUT_VARIABLE NATIVE_DEFINES ERROR_QUIET)
-            if(NATIVE_DEFINES MATCHES "__AVX512F__")
-                message(STATUS "SIMD: AVX-512 (native)")
-            elseif(NATIVE_DEFINES MATCHES "__AVX2__")
-                message(STATUS "SIMD: AVX2 (native)")
-            else()
-                message(STATUS "SIMD: scalar (native)")
-            endif()
+        message(STATUS "SIMD: AVX2 (fallback, no -march=native)")
+        if(MSVC)
+            add_compile_options(/arch:AVX2)
         else()
-            message(STATUS "SIMD: AVX2 (fallback)")
             add_compile_options(-mavx2)
         endif()
     endif()
@@ -98,7 +73,7 @@ elseif(SIMD STREQUAL "AVX512")
         if(HAS_MAVX512)
             add_compile_options(-mavx512f)
         else()
-            message(STATUS "  -> not supported by this compiler, falling back to SCALAR")
+            message(STATUS "  -> not supported, falling back to SCALAR")
         endif()
     endif()
 elseif(SIMD STREQUAL "AVX2")
@@ -110,7 +85,7 @@ elseif(SIMD STREQUAL "AVX2")
         if(HAS_MAVX2)
             add_compile_options(-mavx2)
         else()
-            message(STATUS "  -> not supported by this compiler, falling back to SCALAR")
+            message(STATUS "  -> not supported, falling back to SCALAR")
         endif()
     endif()
 elseif(SIMD STREQUAL "SCALAR")
@@ -141,6 +116,61 @@ target_link_libraries(ptms_lib PUBLIC OpenMP::OpenMP_CXX)
 add_executable(benchmark benchmark/benchmark.cpp)
 target_include_directories(benchmark PRIVATE src)
 target_link_libraries(benchmark PRIVATE ptms_lib)
+
+# =====================================================================
+#                       TBB (Intel NuGet package)
+# =====================================================================
+# Auto-detect the latest version of inteltbb.devel.win / inteltbb.redist.win
+# in the user's NuGet cache. If not found, tbb::parallel_sort is skipped.
+
+file(GLOB _TBB_DEV_ROOTS "$ENV{USERPROFILE}/.nuget/packages/inteltbb.devel.win/*")
+file(GLOB _TBB_REDIST_ROOTS "$ENV{USERPROFILE}/.nuget/packages/inteltbb.redist.win/*")
+list(SORT _TBB_DEV_ROOTS)
+list(SORT _TBB_REDIST_ROOTS)
+
+if(_TBB_DEV_ROOTS)
+    list(GET _TBB_DEV_ROOTS -1 _TBB_DEV_ROOT)   # last = newest
+    set(_TBB_INCLUDE "${_TBB_DEV_ROOT}/build/native/include")
+    set(_TBB_LIB     "${_TBB_DEV_ROOT}/build/native/win-x64/tbb12.lib")
+endif()
+
+if(_TBB_REDIST_ROOTS)
+    list(GET _TBB_REDIST_ROOTS -1 _TBB_REDIST_ROOT)
+    file(GLOB_RECURSE _TBB_DLLS "${_TBB_REDIST_ROOT}/*/tbb12.dll")
+    if(_TBB_DLLS)
+        list(GET _TBB_DLLS 0 _TBB_DLL)
+    endif()
+endif()
+
+if(_TBB_INCLUDE AND _TBB_LIB AND EXISTS "${_TBB_INCLUDE}/tbb/parallel_sort.h")
+    add_library(TBB::tbb UNKNOWN IMPORTED)
+    set_target_properties(TBB::tbb PROPERTIES
+        IMPORTED_LOCATION "${_TBB_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${_TBB_INCLUDE}"
+    )
+    target_link_libraries(benchmark PRIVATE TBB::tbb)
+    target_compile_definitions(benchmark PRIVATE HAVE_TBB=1)
+    message(STATUS "TBB: enabled (Intel NuGet)")
+    message(STATUS "  include: ${_TBB_INCLUDE}")
+    message(STATUS "  library: ${_TBB_LIB}")
+
+    # Copy the TBB runtime DLL next to benchmark.exe so it runs without
+    # having to set PATH manually.
+    if(_TBB_DLL AND EXISTS "${_TBB_DLL}")
+        add_custom_command(TARGET benchmark POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_TBB_DLL}" "$<TARGET_FILE_DIR:benchmark>"
+            COMMENT "Copying tbb12.dll next to benchmark.exe"
+        )
+        message(STATUS "  dll:     ${_TBB_DLL}")
+    else()
+        message(STATUS "  dll:     not found in inteltbb.redist.win (install it if the .exe fails to start)")
+    endif()
+else()
+    message(STATUS "TBB: NOT enabled — headers or lib not found")
+    message(STATUS "  look in: $ENV{USERPROFILE}/.nuget/packages/inteltbb.devel.win/")
+    message(STATUS "  install via VS NuGet: 'inteltbb.devel.win' + 'inteltbb.redist.win'")
+endif()
 
 # =====================================================================
 #                       TESTS

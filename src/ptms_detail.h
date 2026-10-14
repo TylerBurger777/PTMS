@@ -1,6 +1,6 @@
 // PTMS: internal API
-// Used by benchmark to run the sort body inside an existing OpenMP
-// parallel region (avoids nested parallel regions).
+// Used by benchmark to run the sort body inside an existing
+// OpenMP parallel region (avoids nested parallel regions).
 //
 // Do NOT include from user code.
 

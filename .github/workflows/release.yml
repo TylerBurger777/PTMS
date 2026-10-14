@@ -35,6 +35,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libgomp
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
       - run: |
@@ -46,3 +47,18 @@ jobs:
       - uses: softprops/action-gh-release@v1
         with:
           files: ptms-windows-x64.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake libomp
+      - run: |
+          mkdir -p build && cd build
+          cmake .. -DSIMD=SCALAR -DCMAKE_BUILD_TYPE=Release \
+                   -DOpenMP_ROOT="$(brew --prefix libomp)"
+          cmake --build . -j $(sysctl -n hw.ncpu)
+      - run: cd build && tar -czf ../ptms-macos-x64.tar.gz benchmark test_correctness
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: ptms-macos-x64.tar.gz

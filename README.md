@@ -1,5 +1,8 @@
 # PTMS: Parallel Tournament Merge Sort
 
+[![CI](https://github.com/TylerBurger777/PTMS/actions/workflows/ci.yml/badge.svg)](https://github.com/TylerBurger777/PTMS/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 High-performance parallel merge sort with SIMD acceleration
 (AVX2 / AVX-512) and OpenMP tasks.
 
@@ -30,66 +33,28 @@ AMD Ryzen 9 6900HX:
 | `tbb::parallel_sort`   |      0.036 |                 8.30x |
 | **PTMS**               |  **0.0163** |            **~18.4x** |
 
-On AMD Ryzen 7 7500F with **AVX-512**: median **0.0162 s** at 12 threads.
+## Thread modes
 
-## Requirements
+PTMS supports four ways to pick the number of threads:
 
-- C++17 compiler (GCC 9+, Clang 10+, MSVC 2019+ with clang-cl)
-- OpenMP 4.5+
-- CMake 3.15+
+| Mode | Description |
+|---|---|
+| `Auto` | Automatically by array size and core count. Default. |
+| `Single` | Always 1 thread (sequential). |
+| `ByCores` | Physical core count (no SMT). |
+| `Fixed(N)` | Exactly N threads. |
 
-### Note on MSVC
-
-MSVC does not support `#pragma omp taskgroup` even with `/openmp:llvm`.
-Use **clang-cl** (bundled with Visual Studio).
-
-## Building
-
-```bash
-git clone https://github.com/TylerBurger777/PTMS.git
-cd PTMS
-mkdir build && cd build
-cmake ..
-cmake --build . --config Release -j
-```
-
-### Manual SIMD override
-
-```bash
-cmake .. -DSIMD=AVX512   # force AVX-512
-cmake .. -DSIMD=AVX2     # force AVX2
-cmake .. -DSIMD=SCALAR   # disable SIMD
-```
-
-## Running the benchmark
-
-```bash
-OMP_NUM_THREADS=16 OMP_PROC_BIND=true ./benchmark
-```
-
-## Running tests
-
-```bash
-cd build
-ctest --output-on-failure
-```
-
-## Using the library
+When `N < 10000` (see `PARALLEL_THRESHOLD` in `src/ptms.cpp`),
+parallelism is disabled automatically, since the OpenMP task overhead
+exceeds the parallel speedup. `Fixed` bypasses this check.
 
 ```cpp
 #include <ptms.h>
-#include <vector>
 
-int main() {
-    std::vector<int> a = {3, 1, 4, 1, 5, 9, 2, 6};
-    std::vector<int> buf(a.size());
+std::vector<int> a = ...;
+std::vector<int> buf(a.size());
 
-    ptms::sort_int(a.data(), buf.data(), (int)a.size());
-    // a = {1, 1, 2, 3, 4, 5, 6, 9}
-    return 0;
-}
-```
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+ptms::sort_int(a.data(), buf.data(), (int)a.size());                         // Auto
+ptms::sort_int(a.data(), buf.data(), (int)a.size(), ptms::ThreadMode::Single);
+ptms::sort_int(a.data(), buf.data(), (int)a.size(), ptms::ThreadMode::ByCores);
+ptms::sort_int(a.data(), buf.data(), (int)a.size(), ptms::ThreadMode::Fixed, 8);

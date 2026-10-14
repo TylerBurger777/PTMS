@@ -1,33 +1,39 @@
 // PTMS: Parallel Tournament Merge Sort
-// Public API header
+// Public API
 //
 // Copyright (c) 2025 Andrey Afimov
 // SPDX-License-Identifier: MIT
 
 #pragma once
 
-#include <cstddef>
-
 namespace ptms {
 
-// Sort an array of int in ascending order using the PTMS algorithm.
-//
-// Parameters:
-//   a       - input/output array of int (size >= n)
-//   buf     - auxiliary buffer (size >= n), must not alias 'a'
-//   n       - number of elements
-//   threads - number of OpenMP threads; if 0, uses all available
-//
-// Requirements:
-//   - buf != a, and both are non-null
-//   - buf has at least n elements
-//   - n >= 4 * threads (for correctness with small blocks)
-//
-// Not thread-safe: do not call concurrently on overlapping data.
-void sort_int(int* a, int* buf, int n, int threads = 0);
+// Controls how sort_int chooses the number of threads.
+enum class ThreadMode {
+    Auto,      // auto-detect from array size and available cores
+    Single,    // always single-threaded
+    ByCores,   // use physical cores only (no SMT)
+    Fixed      // use exactly `fixed_threads` threads (1..max)
+};
 
-// Return the SIMD level compiled into this binary.
-// Possible values: "AVX-512", "AVX2", "scalar".
+// One-shot sort of int32. AVX2-accelerated fast path.
+void sort_int(int* a, int* buf, int n,
+              ThreadMode mode = ThreadMode::Auto,
+              int fixed_threads = 0);
+
+// Batch sort of int32. Reuses a single parallel region for all arrays.
+void sort_int_batch(int* data, int* buf, int n, int num_arrays,
+                    ThreadMode mode = ThreadMode::Auto,
+                    int fixed_threads = 0);
+
+// Returns "AVX-512", "AVX2" or "scalar".
 const char* simd_level();
 
+// Number of physical cores (excluding SMT siblings).
+int physical_core_count();
+
 } // namespace ptms
+
+// Generic templated pipeline for arbitrary types.
+// Included last so that ThreadMode is already declared above.
+#include "ptms_generic.h"

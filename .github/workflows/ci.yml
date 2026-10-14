@@ -7,9 +7,6 @@ on:
     branches: [ main, master ]
 
 jobs:
-  # =====================================================================
-  # LINUX — GCC + OpenMP
-  # =====================================================================
   linux:
     name: Linux / ${{ matrix.simd }}
     runs-on: ubuntu-latest
@@ -19,28 +16,13 @@ jobs:
         simd: [AVX2, SCALAR]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake g++
-
-      - name: Configure
-        run: |
-          mkdir -p build
-          cd build
+      - run: sudo apt-get update && sudo apt-get install -y cmake g++
+      - run: |
+          mkdir -p build && cd build
           cmake .. -DSIMD=${{ matrix.simd }} -DCMAKE_BUILD_TYPE=Release
+          cmake --build . -j $(nproc)
+      - run: cd build && ctest --output-on-failure
 
-      - name: Build
-        run: cd build && cmake --build . -j $(nproc)
-
-      - name: Test
-        run: cd build && ctest --output-on-failure
-
-  # =====================================================================
-  # WINDOWS — MSYS2 MinGW-w64 GCC
-  # libgomp устанавливается явно (нужен для -lgomp при линковке).
-  # =====================================================================
   windows:
     name: Windows / ${{ matrix.simd }}
     runs-on: windows-latest
@@ -53,9 +35,7 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
@@ -64,53 +44,31 @@ jobs:
             mingw-w64-x86_64-libgomp
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
-
       - name: Verify libgomp
         run: |
           echo "=== libgomp search ==="
           find /mingw64 -name "libgomp*" 2>/dev/null
           echo "=== g++ -print-file-name ==="
           g++ -print-file-name=libgomp.dll.a
-
-      - name: Configure
-        run: |
-          mkdir -p build
-          cd build
+      - run: |
+          mkdir -p build && cd build
           cmake .. -G Ninja -DSIMD=${{ matrix.simd }} -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cd build && cmake --build .
-
-      - name: Copy MinGW runtime DLLs
-        run: |
+          cmake --build .
+      - run: |
           cp /mingw64/bin/libgomp-1.dll build/ 2>/dev/null || true
           cp /mingw64/bin/libstdc++-6.dll build/ 2>/dev/null || true
           cp /mingw64/bin/libgcc_s_seh-1.dll build/ 2>/dev/null || true
+      - run: cd build && ctest --output-on-failure
 
-      - name: Test
-        run: cd build && ctest --output-on-failure
-
-  # =====================================================================
-  # macOS — только SCALAR (Apple Silicon не поддерживает AVX2)
-  # =====================================================================
   macos:
     name: macOS / SCALAR
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: brew install cmake libomp
-
-      - name: Configure
-        run: |
-          mkdir -p build
-          cd build
+      - run: brew install cmake libomp
+      - run: |
+          mkdir -p build && cd build
           cmake .. -DSIMD=SCALAR -DCMAKE_BUILD_TYPE=Release \
                    -DOpenMP_ROOT="$(brew --prefix libomp)"
-
-      - name: Build
-        run: cd build && cmake --build . -j $(sysctl -n hw.ncpu)
-
-      - name: Test
-        run: cd build && ctest --output-on-failure
+          cmake --build . -j $(sysctl -n hw.ncpu)
+      - run: cd build && ctest --output-on-failure
