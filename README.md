@@ -12,7 +12,9 @@ techniques: parallel chunking, tournament (multi-way) merging at the top
 levels, AVX2-accelerated base cases, and a small set of sorting networks
 for tiny inputs. Nothing here is novel in a research sense. What is here
 is a fast, portable, type-generic merge sort that is competitive with
-`tbb::parallel_sort` and with parallel radix sort on 64-bit keys.
+`tbb::parallel_sort` and with parallel radix sort on 64-bit keys, and
+that **outperforms IPS4o on cache-resident inputs** (see
+[Benchmarks](#benchmarks)).
 
 ---
 
@@ -24,6 +26,7 @@ is a fast, portable, type-generic merge sort that is competitive with
 - [Building](#building)
 - [Benchmarks](#benchmarks)
 - [Architectural limitations](#architectural-limitations)
+- [Summary](#summary)
 - [License](#license)
 
 ---
@@ -188,32 +191,140 @@ Why PTMS wins against LSD radix on 64-bit keys: radix does
 i.e. cost scales as `sizeof(T)`. Going from int32 to int64 makes radix
 4x more expensive but PTMS only 2x.
 
+### PTMS vs IPS4o across sizes — the crossover
+
+IPS4o is the state-of-the-art parallel samplesort and, on large inputs,
+is the fastest sorter in the comparison set. But IPS4o pays a
+**fixed setup cost**: it extracts and sorts `kBuckets × kOversample =
+16384` sample elements on every call, computes 255 splitters, and
+initialises a 256-bucket classifier. On cache-resident inputs, this
+setup dominates and PTMS wins.
+
+The table below is from a same-machine run (`bench_vs_ips4o`, adaptive
+cooldown 200/500/1000 ms by N, runs = 5, warmup = 2, median). Ratio
+< 1.0 means PTMS is faster; > 1.0 means IPS4o is faster.
+
+**int32:**
+
+| N | PTMS | IPS4o | Ratio | Winner |
+|---|---|---|---|---|
+| 10K | 0.10 ms | 0.38 ms | 0.28 | **PTMS 3.6x** |
+| 20K | 0.18 ms | 0.51 ms | 0.35 | **PTMS 2.9x** |
+| 40K | 0.32 ms | 0.97 ms | 0.33 | **PTMS 3.0x** |
+| 80K | 0.54 ms | 1.94 ms | 0.28 | **PTMS 3.6x** |
+| 160K | 1.08 ms | 1.56 ms | 0.69 | **PTMS 1.4x** |
+| 320K | 2.06 ms | 3.53 ms | 0.58 | **PTMS 1.7x** |
+| 640K | 2.50 ms | 3.06 ms | 0.82 | **PTMS 1.2x** |
+| 1.28M | 4.59 ms | 5.18 ms | 0.89 | **PTMS 1.1x** |
+| 2.56M | 9.64 ms | 7.50 ms | 1.29 | IPS4o 1.3x |
+| 4M | 20.4 ms | 10.2 ms | 2.00 | IPS4o 2.0x |
+
+**int64:**
+
+| N | PTMS | IPS4o | Ratio | Winner |
+|---|---|---|---|---|
+| 10K | 0.12 ms | 0.38 ms | 0.32 | **PTMS 3.2x** |
+| 20K | 0.20 ms | 1.15 ms | 0.17 | **PTMS 5.9x** |
+| 40K | 0.32 ms | 4.73 ms | 0.07 | **PTMS 14.9x** (see note) |
+| 80K | 0.67 ms | 1.42 ms | 0.47 | **PTMS 2.1x** |
+| 160K | 1.09 ms | 1.80 ms | 0.60 | **PTMS 1.7x** |
+| 320K | 2.12 ms | 1.95 ms | 1.09 | IPS4o 1.1x |
+| 640K | 3.95 ms | 3.18 ms | 1.24 | IPS4o 1.2x |
+| 1.28M | 5.87 ms | 4.69 ms | 1.25 | IPS4o 1.3x |
+| 2.56M | 18.6 ms | 9.57 ms | 1.94 | IPS4o 1.9x |
+| 4M | 32.1 ms | 14.6 ms | 2.20 | IPS4o 2.2x |
+
+**float:**
+
+| N | PTMS | IPS4o | Ratio | Winner |
+|---|---|---|---|---|
+| 10K | 0.14 ms | 0.37 ms | 0.37 | **PTMS 2.7x** |
+| 20K | 0.23 ms | 0.67 ms | 0.34 | **PTMS 2.9x** |
+| 40K | 0.42 ms | 32.4 ms | 0.01 | **PTMS 78x** (see note) |
+| 80K | 0.76 ms | 5.00 ms | 0.15 | **PTMS 6.6x** |
+| 160K | 1.52 ms | 1.96 ms | 0.78 | **PTMS 1.3x** |
+| 320K | 2.03 ms | 1.90 ms | 1.07 | IPS4o 1.1x |
+| 640K | 4.70 ms | 3.09 ms | 1.52 | IPS4o 1.5x |
+| 1.28M | 6.51 ms | 4.99 ms | 1.30 | IPS4o 1.3x |
+| 2.56M | 13.3 ms | 7.85 ms | 1.70 | IPS4o 1.7x |
+| 4M | 23.8 ms | 12.1 ms | 1.96 | IPS4o 2.0x |
+
+**double:**
+
+| N | PTMS | IPS4o | Ratio | Winner |
+|---|---|---|---|---|
+| 10K | 0.15 ms | 0.43 ms | 0.35 | **PTMS 2.9x** |
+| 20K | 0.25 ms | 1.23 ms | 0.21 | **PTMS 4.8x** |
+| 40K | 0.38 ms | 3.59 ms | 0.11 | **PTMS 9.4x** (see note) |
+| 80K | 0.82 ms | 1.40 ms | 0.59 | **PTMS 1.7x** |
+| 160K | 1.52 ms | 4.27 ms | 0.36 | **PTMS 2.8x** |
+| 320K | 2.04 ms | 5.53 ms | 0.37 | **PTMS 2.7x** |
+| 640K | 5.01 ms | 3.76 ms | 1.33 | IPS4o 1.3x |
+| 1.28M | 7.13 ms | 4.94 ms | 1.44 | IPS4o 1.4x |
+| 2.56M | 29.1 ms | 9.52 ms | 3.05 | IPS4o 3.1x |
+| 4M | 36.3 ms | 15.8 ms | 2.31 | IPS4o 2.3x |
+
+**Note on outlier rows.** Some IPS4o measurements at N = 40K
+(32.4 ms for float, 4.73 ms for int64, 3.59 ms for double) are 5–80x
+higher than the trend on either side of N = 40K. This is not an
+algorithmic effect of PTMS; it is an IPS4o-side anomaly on this
+particular size. The exact cause is not diagnosed. PTMS is unaffected.
+The rows are reported as measured.
+
+### Crossover points
+
+| Type | Size of element | Crossover N | Working set at crossover |
+|---|---|---|---|
+| int32 | 4 B | **2.56M** | 10.2 MB |
+| int64 | 8 B | **320K** | 2.5 MB |
+| float | 4 B | **320K** | 1.25 MB |
+| double | 8 B | **640K** | 5 MB |
+
+Two observations:
+
+1. **PTMS wins below the crossover**, by 1.1–10x depending on type and
+   size. On cache-resident data, IPS4o's fixed setup cost and its
+   bucket-classification overhead dominate; PTMS's register-to-register
+   merge path does not have these costs.
+2. **int32 has the highest crossover (2.56M elements, ~10 MB)**,
+   because PTMS has an AVX2 fast path only for `int32`. For int64,
+   float, and double the generic pipeline runs without SIMD kernels,
+   and IPS4o overtakes PTMS earlier (0.32M–0.64M elements, 1.25–5 MB).
+
+Above the crossover, IPS4o's `log₂₅₆(N)` memory passes beat PTMS's
+`log₂(N)` passes, and the ratio grows to ~2x at N = 4M. See
+[Architectural limitations](#architectural-limitations) for the model.
+
 ---
 
 ## Architectural limitations
 
-**PTMS is not a state-of-the-art parallel sorter.** It is a
-well-optimised 2-way merge sort. Where the field has moved on, PTMS has
-not kept up. Concretely:
+**PTMS is not a state-of-the-art parallel sorter for large inputs.** It
+is a well-optimised 2-way merge sort with a genuine advantage on
+cache-resident data. Above the crossover points listed above, where the
+working set no longer fits in L3, IPS4o wins and the gap grows. The
+following limitations are measurable facts.
 
-### 1. It loses to parallel samplesort on every measured type and size
+### 1. It loses to IPS4o on DRAM-bound inputs
 
-Comparison against [IPS4o](https://github.com/ips4o/ips4o)
-(`ips4o::parallel::sort`, BSD-2-Clause), same machine, same run
-conditions (Runs = 5, warmup = 2, cooldown = 1000 ms, median):
+At N ≥ 4M int32 and N ≥ 640K for 8-byte types, PTMS is slower than
+IPS4o. The gap grows with N:
 
 | Type | N | PTMS | IPS4o | PTMS / IPS4o |
 |---|---|---|---|---|
-| int32 | 4M | 17.5 ms | 10.2 ms | 0.58x |
-| int32 | 16M | 94.3 ms | 66.4 ms | 0.70x |
-| int64 | 4M | 32.7 ms | 15.5 ms | 0.47x |
-| int64 | 16M | 159.5 ms | 56.9 ms | 0.36x |
-| double | 4M | 35.9 ms | 18.0 ms | 0.50x |
-| double | 16M | 164.7 ms | 84.2 ms | 0.51x |
+| int32 | 4M | 20.4 ms | 10.2 ms | 2.00x |
+| int32 | 16M | 94.3 ms | 66.4 ms | 1.42x |
+| int64 | 4M | 32.1 ms | 14.6 ms | 2.20x |
+| int64 | 16M | 159.5 ms | 56.9 ms | 2.80x |
+| double | 4M | 36.3 ms | 15.8 ms | 2.31x |
+| double | 16M | 164.7 ms | 84.2 ms | 1.96x |
 
-PTMS is 1.4–2.8x slower than IPS4o across the board. The gap is largest
-on 64-bit keys at 16M, where the memory-bound behaviour of multi-level
-merge sort punishes PTMS hardest.
+**Why.** IPS4o is a partition-based sorter: it does
+`log₂₅₆(N) ≈ log₂(N)/8` memory passes. PTMS is a merge-based sorter:
+it does `log₂(N)` memory passes. On DRAM-bound data, memory traffic is
+the limiting factor, and the ratio of passes (`log₂(N) /
+log₂(N)/8 = 8`) is partially offset by IPS4o's higher per-element CPU
+cost, giving the ~2x measured gap.
 
 ### 2. Multi-way experiments did not close the gap
 
@@ -232,11 +343,21 @@ repository):
   PTMS** on N = 4M int32. But 1.6x slower than parallel radix and 1.6x
   slower than IPS4o. This is a distributing sort, not a multi-way
   samplesort.
+- **PTMS8 — 8-way tournament merge**, with an 8-way loser tree both at
+  the top level and inside chunks. Tested at N = 1M–16M across four
+  types. Result: 3–10x **slower** than 2-way PTMS on the reference
+  hardware. Root causes: (a) scalar loser tree has 3 dependent
+  comparisons per output element and no SIMD; (b) OpenMP overhead on
+  thousands of small base-case calls; (c) on cache-resident data the
+  register-to-register 2-way bitonic merge is 4x faster than any
+  memory-based k-way merge, regardless of k. 8-way merge is not a win
+  below the L3 threshold.
 
-Conclusion: naive multi-way loses to 2-way merge, and a proper
-sophisticated samplesort (IPS4o) wins at every size measured. There is
-no configuration of merge sort that beats IPS4o on uniform random data
-at these sizes; the algorithmic constant factors favour samplesort.
+Conclusion: naive multi-way loses to 2-way merge on cache-resident
+data, and a proper samplesort (IPS4o) wins above the L3 threshold.
+There is no configuration of merge sort that beats IPS4o on uniform
+random data at DRAM-bound sizes; the algorithmic constant factors
+favour partition-based sorters there.
 
 ### 3. `std::string` is slow
 
@@ -272,25 +393,41 @@ kernels are active, inspect the build configuration at compile time.
 
 ## Summary
 
-PTMS is worth using when:
+**Use PTMS when** your input fits in L3 cache. Concretely, for the
+reference hardware (16 MB L3):
 
-- You need a fast, portable merge sort and cannot bring in a samplesort
-  dependency.
-- Your keys are 64-bit and you want something competitive with parallel
-  radix without paying the `sizeof(T)²` cost.
-- Your types are trivially copyable and you want a template that just
-  works, without writing per-type kernels.
-- You are already using OpenMP and do not want a second threading
-  runtime.
+- `int32`, N ≤ ~2.5M (10 MB)
+- `int64`, `double`, N ≤ ~320K–640K (2.5–5 MB)
+- `float`, N ≤ ~320K (1.25 MB)
 
-PTMS is **not** the right choice when:
+In this range PTMS is 1.1–10x faster than IPS4o and 1.1–1.9x faster
+than `tbb::parallel_sort` depending on type.
 
-- Peak throughput on uniform random data is the only metric that
-  matters. Use IPS4o or parallel radix.
+PTMS also has non-performance advantages regardless of size:
+
+- **No TBB dependency.** OpenMP only. Useful in restricted build
+  environments where pulling in oneTBB is not viable.
+- **Template-generic API.** `ptms::sort<T>` works for any
+  trivially-copyable type without per-type kernels.
+- **Small code base.** ~1500 lines versus IPS4o's ~15K. Easier to
+  audit and embed.
+
+**Do not use PTMS when:**
+
+- Your input exceeds the L3 threshold. **Use IPS4o.** It is 1.4–2.8x
+  faster above the crossover and the gap grows with N.
+- Your keys are 64-bit and you want to beat parallel radix. PTMS is
+  competitive (1.07–1.21x) but IPS4o does better.
 - Your inputs are `std::string` or other non-trivially-copyable types.
   Use `tbb::parallel_sort`.
 - Your inputs are almost-sorted or have long runs. A natural merge sort
   will do better.
+
+**The honest positioning:** PTMS is a fast sorter for cache-resident
+data with a small, portable, OpenMP-only implementation. IPS4o is a
+faster sorter for DRAM-bound data with a larger implementation and a
+TBB dependency. Both are useful; they occupy different regions of the
+size/type space.
 
 ---
 
